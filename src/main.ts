@@ -197,7 +197,7 @@ export default class SRPlugin extends Plugin {
                         await this.sync();
                         // this.store.save();
                     },
-                    30 * 60 * 1000,
+                    12 * 60 * 60 * 1000,
                 ),
             );
         }
