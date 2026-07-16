@@ -803,15 +803,30 @@ export class DataStore {
         excludePath?: string,
     ): { trackedFile: TrackedFile; cardInfo: CardInfo; cardIndex: number } | null {
         if (!blockID) return null;
+        let firstMatch: { trackedFile: TrackedFile; cardInfo: CardInfo; cardIndex: number } | null =
+            null;
+        let matchCount = 0;
+        const matchedPaths = new Set<string>();
+
         for (const tf of this.data.trackedFiles) {
             if (tf == null || !tf.hasCards || tf.path === excludePath) continue;
             for (let i = 0; i < tf.cardItems.length; i++) {
                 if (tf.cardItems[i].blockID === blockID) {
-                    return { trackedFile: tf, cardInfo: tf.cardItems[i], cardIndex: i };
+                    matchCount++;
+                    matchedPaths.add(tf.path);
+                    if (firstMatch == null) {
+                        firstMatch = { trackedFile: tf, cardInfo: tf.cardItems[i], cardIndex: i };
+                    }
+                    if (matchCount > 1) {
+                        const warningMessage = `SRR warning: Duplicate card block ID "${blockID}" found in multiple tracked files (${Array.from(matchedPaths).join(", ")}). Skipping cross-file card migration.`;
+                        console.warn(warningMessage);
+                        MiscUtils.notice(warningMessage);
+                        return null;
+                    }
                 }
             }
         }
-        return null;
+        return firstMatch;
     }
 
     /**

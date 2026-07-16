@@ -1,10 +1,11 @@
 import { DataStore } from "src/dataStore/data";
 import { DataLocation } from "src/dataStore/dataLocation";
-import { CardInfo, TrackedFile } from "src/dataStore/trackedFile";
-import { RPITEMTYPE, RepetitionItem } from "src/dataStore/repetitionItem";
+import { Queue } from "src/dataStore/queue";
+import { RPITEMTYPE } from "src/dataStore/repetitionItem";
 import { DEFAULT_SETTINGS, SRSettings } from "src/settings";
-import { SrsAlgorithm, algorithmNames } from "src/algorithms/algorithms";
+import { algorithmNames } from "src/algorithms/algorithms";
 import { DefaultAlgorithm } from "src/algorithms/scheduling_default";
+import { MiscUtils } from "src/util/utils_recall";
 
 const settings: SRSettings = Object.assign({}, DEFAULT_SETTINGS);
 settings.dataLocation = DataLocation.PluginFolder;
@@ -16,7 +17,7 @@ function createStoreWithTwoFiles(): DataStore {
 
     const store = new DataStore(settings, "./");
     store.data = {
-        queues: { newQueue: {}, dueQueue: {}, repeatQueue: {} } as any,
+        queues: new Queue(),
         reviewedCounts: {},
         reviewedCardCounts: {},
         items: [],
@@ -92,6 +93,33 @@ describe("Cross-file blockID lookup", () => {
             expect(result).not.toBeNull();
             expect(result.trackedFile.path).toBe("folder/noteA.md");
         });
+
+        test("returns null and warns when blockID is ambiguous across tracked files", () => {
+            const store = createStoreWithTwoFiles();
+            store.trackFile("folder/noteC.md", RPITEMTYPE.CARD, false);
+            const fileC = store.getTrackedFile("folder/noteC.md");
+            const duplicateCard = fileC.trackCard(20, "hash_card_duplicate");
+            duplicateCard.blockID = "^block123";
+            store.updateCardItems(fileC, duplicateCard, 1, "deck1", false);
+
+            const warningSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+            const noticeSpy = jest.spyOn(MiscUtils, "notice").mockImplementation(() => undefined);
+
+            const result = store.findCardInfoByBlockID("^block123", "folder/noteB.md");
+
+            expect(result).toBeNull();
+            expect(warningSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Duplicate card block ID "^block123"'),
+            );
+            expect(noticeSpy).toHaveBeenCalledWith(
+                expect.stringContaining('Duplicate card block ID "^block123"'),
+            );
+            expect(store.getTrackedFile("folder/noteA.md").cardItems).toHaveLength(1);
+            expect(store.getTrackedFile("folder/noteC.md").cardItems).toHaveLength(1);
+
+            warningSpy.mockRestore();
+            noticeSpy.mockRestore();
+        });
     });
 
     describe("migrateCardInfo", () => {
@@ -161,6 +189,57 @@ describe("Cross-file blockID lookup", () => {
             expect(fileB.cardItems.length).toBe(2);
             expect(fileB.cardItems[0].lineNo).toBe(3);
             expect(fileB.cardItems[1].lineNo).toBe(10);
+        });
+
+        test("supports round-trip migration while preserving IDs, scheduling state, and file index", () => {
+            const store = createStoreWithTwoFiles();
+            const fileA = store.getTrackedFile("folder/noteA.md");
+            const fileB = store.getTrackedFile("folder/noteB.md");
+            const originalCardInfo = fileA.cardItems[0];
+            const originalItemId = originalCardInfo.itemIds[0];
+            const originalState = {
+                itemIds: [...originalCardInfo.itemIds],
+                blockID: originalCardInfo.blockID,
+                timesReviewed: store.getItembyID(originalItemId).timesReviewed,
+                timesCorrect: store.getItembyID(originalItemId).timesCorrect,
+                nextReview: store.getItembyID(originalItemId).nextReview,
+                sched: store.getItembyID(originalItemId).getSched(),
+            };
+
+            const movedToB = store.migrateCardInfo(fileA, 0, fileB, 5, "hash_in_b", "^block123");
+            const itemAfterMoveToB = store.getItembyID(originalItemId);
+
+            expect(fileA.cardItems).toHaveLength(0);
+            expect(fileB.cardItems).toHaveLength(1);
+            expect(fileA.cardItems.length + fileB.cardItems.length).toBe(1);
+            expect(movedToB.itemIds).toEqual(originalState.itemIds);
+            expect(movedToB.blockID).toBe(originalState.blockID);
+            expect(itemAfterMoveToB.fileIndex).toBe(store.getFileIndex("folder/noteB.md"));
+            expect(itemAfterMoveToB.timesReviewed).toBe(originalState.timesReviewed);
+            expect(itemAfterMoveToB.timesCorrect).toBe(originalState.timesCorrect);
+            expect(itemAfterMoveToB.nextReview).toBe(originalState.nextReview);
+            expect(itemAfterMoveToB.getSched()).toEqual(originalState.sched);
+
+            const movedBackToA = store.migrateCardInfo(
+                fileB,
+                0,
+                fileA,
+                12,
+                "hash_back_in_a",
+                "^block123",
+            );
+            const itemAfterMoveBackToA = store.getItembyID(originalItemId);
+
+            expect(fileA.cardItems).toHaveLength(1);
+            expect(fileB.cardItems).toHaveLength(0);
+            expect(fileA.cardItems.length + fileB.cardItems.length).toBe(1);
+            expect(movedBackToA.itemIds).toEqual(originalState.itemIds);
+            expect(movedBackToA.blockID).toBe(originalState.blockID);
+            expect(itemAfterMoveBackToA.fileIndex).toBe(store.getFileIndex("folder/noteA.md"));
+            expect(itemAfterMoveBackToA.timesReviewed).toBe(originalState.timesReviewed);
+            expect(itemAfterMoveBackToA.timesCorrect).toBe(originalState.timesCorrect);
+            expect(itemAfterMoveBackToA.nextReview).toBe(originalState.nextReview);
+            expect(itemAfterMoveBackToA.getSched()).toEqual(originalState.sched);
         });
     });
 });
