@@ -64,6 +64,9 @@ export const DEFAULT_SRS_DATA: SrsData = {
 export class DataStore {
     static instance: DataStore;
 
+    private blockIDIndex: Map<string, Array<{ trackedFile: TrackedFile; cardIndex: number }>> =
+        new Map();
+
     /**
      * @type {SrsData}
      */
@@ -104,6 +107,26 @@ export class DataStore {
         this.data.trackedFiles = this.data.trackedFiles.map(TrackedFile.create);
         this.data.items = this.data.items.map(RepetitionItem.create);
         this.data.queues = Queue.create(this.data.queues);
+        this.rebuildBlockIdIndex();
+    }
+
+    private rebuildBlockIdIndex() {
+        this.blockIDIndex.clear();
+
+        for (const trackedFile of this.data.trackedFiles) {
+            if (trackedFile == null || !trackedFile.hasCards || trackedFile.cardItems == null) {
+                continue;
+            }
+
+            for (let i = 0; i < trackedFile.cardItems.length; i++) {
+                const blockID = trackedFile.cardItems[i]?.blockID;
+                if (!blockID) continue;
+
+                const matches = this.blockIDIndex.get(blockID) ?? [];
+                matches.push({ trackedFile, cardIndex: i });
+                this.blockIDIndex.set(blockID, matches);
+            }
+        }
     }
 
     /**
@@ -477,6 +500,7 @@ export class DataStore {
             }
         }
         const data = this.updateItems(path, itemtype, dname, notice);
+        this.rebuildBlockIdIndex();
         console.log("Tracked: " + path);
         // this.plugin.updateStatusBar();
         return data;
@@ -548,6 +572,7 @@ export class DataStore {
             MiscUtils.notice(t("DATA_UNTRACKED_ITEMS", { numItems: numItems, nulrstr: nulrstr }));
         }
 
+        this.rebuildBlockIdIndex();
         console.log("Untracked: " + path + nulrstr);
         return numItems;
     }
@@ -721,6 +746,7 @@ export class DataStore {
             added: added,
             removed: removed,
         });
+        this.rebuildBlockIdIndex();
         console.debug(msg);
         if (notice) {
             MiscUtils.notice(msg);
@@ -803,15 +829,25 @@ export class DataStore {
         excludePath?: string,
     ): { trackedFile: TrackedFile; cardInfo: CardInfo; cardIndex: number } | null {
         if (!blockID) return null;
-        for (const tf of this.data.trackedFiles) {
-            if (tf == null || !tf.hasCards || tf.path === excludePath) continue;
-            for (let i = 0; i < tf.cardItems.length; i++) {
-                if (tf.cardItems[i].blockID === blockID) {
-                    return { trackedFile: tf, cardInfo: tf.cardItems[i], cardIndex: i };
-                }
-            }
+
+        const matches = this.blockIDIndex.get(blockID) ?? [];
+        const candidates = matches.filter((match) => match.trackedFile.path !== excludePath);
+
+        if (candidates.length > 1) {
+            return null;
         }
-        return null;
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        const { trackedFile, cardIndex } = candidates[0];
+        const cardInfo = trackedFile.cardItems[cardIndex];
+        if (cardInfo == null) {
+            return null;
+        }
+
+        return { trackedFile, cardInfo, cardIndex };
     }
 
     /**
@@ -833,8 +869,23 @@ export class DataStore {
         lineNo: number,
         cardTextHash: string,
         blockID: string,
-    ): CardInfo {
+    ): CardInfo | null {
+        if (
+            sourceFile == null ||
+            destFile == null ||
+            sourceFile.path === destFile.path ||
+            cardIndex < 0 ||
+            !sourceFile.cardItems ||
+            cardIndex >= sourceFile.cardItems.length
+        ) {
+            return null;
+        }
+
         const cardInfo = sourceFile.cardItems.splice(cardIndex, 1)[0];
+        if (cardInfo == null) {
+            return null;
+        }
+
         cardInfo.lineNo = lineNo;
         cardInfo.cardTextHash = cardTextHash;
         cardInfo.blockID = blockID;
@@ -854,6 +905,7 @@ export class DataStore {
             }
         }
 
+        this.rebuildBlockIdIndex();
         return cardInfo;
     }
 

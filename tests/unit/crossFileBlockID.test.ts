@@ -92,6 +92,20 @@ describe("Cross-file blockID lookup", () => {
             expect(result).not.toBeNull();
             expect(result.trackedFile.path).toBe("folder/noteA.md");
         });
+
+        test("returns null when the same blockID exists in multiple files", () => {
+            const store = createStoreWithTwoFiles();
+            const fileA = store.getTrackedFile("folder/noteA.md");
+            const fileB = store.getTrackedFile("folder/noteB.md");
+
+            const duplicateCard = fileB.trackCard(3, "hash_dup");
+            duplicateCard.blockID = "^block123";
+            store.updateCardItems(fileB, duplicateCard, 1, "deck1", false);
+
+            const result = store.findCardInfoByBlockID("^block123", "folder/noteC.md");
+
+            expect(result).toBeNull();
+        });
     });
 
     describe("migrateCardInfo", () => {
@@ -161,6 +175,17 @@ describe("Cross-file blockID lookup", () => {
             expect(fileB.cardItems.length).toBe(2);
             expect(fileB.cardItems[0].lineNo).toBe(3);
             expect(fileB.cardItems[1].lineNo).toBe(10);
+        });
+
+        test("does nothing when source and destination are the same file", () => {
+            const store = createStoreWithTwoFiles();
+            const fileA = store.getTrackedFile("folder/noteA.md");
+            const before = fileA.cardItems.slice();
+
+            const result = store.migrateCardInfo(fileA, 0, fileA, 99, "new_hash", "^block123");
+
+            expect(result).toBeNull();
+            expect(fileA.cardItems).toEqual(before);
         });
     });
 });
